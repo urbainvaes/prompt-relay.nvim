@@ -5,6 +5,13 @@ local defaults = {
   preferred_provider = "opencode",
 }
 
+local providers = { "opencode", "claude", "codex" }
+local provider_names = {
+  opencode = "OpenCode",
+  claude = "Claude Code",
+  codex = "Codex",
+}
+
 local current_keymap
 
 local function notify_error(message)
@@ -45,7 +52,7 @@ local function find_agent(preferred_provider)
     return nil, "could not list tmux panes: " .. pane_err
   end
 
-  local found = { opencode = {}, claude = {} }
+  local found = { opencode = {}, claude = {}, codex = {} }
   for line in panes:gmatch("[^\n]+") do
     local pane, command = line:match("^([^\t]+)\t(.+)$")
     if pane and command then
@@ -54,17 +61,26 @@ local function find_agent(preferred_provider)
         table.insert(found.opencode, pane)
       elseif command == "claude" or command == "claude-code" then
         table.insert(found.claude, pane)
+      elseif command == "codex" or command == "codex-cli" then
+        table.insert(found.codex, pane)
       end
     end
   end
 
-  local other_provider = preferred_provider == "opencode" and "claude" or "opencode"
-  local provider = #found[preferred_provider] > 0 and preferred_provider or other_provider
-  if #found[provider] == 0 then
-    return nil, "no Claude Code or OpenCode pane found in this tmux session"
+  local priority = { preferred_provider }
+  for _, provider in ipairs(providers) do
+    if provider ~= preferred_provider then
+      table.insert(priority, provider)
+    end
   end
 
-  return { provider = provider, pane = found[provider][1] }
+  for _, provider in ipairs(priority) do
+    if #found[provider] > 0 then
+      return { provider = provider, pane = found[provider][1] }
+    end
+  end
+
+  return nil, "no Claude Code, OpenCode, or Codex pane found in this tmux session"
 end
 
 local function position(line, column)
@@ -114,16 +130,7 @@ local function capture_context(is_visual)
 end
 
 local function send(agent, payload)
-  local _, err = tmux({ "tmux", "select-window", "-t", agent.pane })
-  if err then
-    return nil, "could not focus the agent pane: " .. err
-  end
-  _, err = tmux({ "tmux", "select-pane", "-t", agent.pane })
-  if err then
-    return nil, "could not focus the agent pane: " .. err
-  end
-
-  _, err = tmux({ "tmux", "load-buffer", "-" }, payload)
+  local _, err = tmux({ "tmux", "load-buffer", "-" }, payload)
   if err then
     return nil, "could not prepare the request for tmux: " .. err
   end
@@ -155,7 +162,7 @@ local function relay(is_visual, preferred_provider)
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   end
 
-  vim.ui.input({ prompt = "Request for " .. agent.provider .. ": " }, function(request)
+  vim.ui.input({ prompt = "Request for " .. provider_names[agent.provider] .. ": " }, function(request)
     if not request or vim.trim(request) == "" then
       return
     end
@@ -163,6 +170,8 @@ local function relay(is_visual, preferred_provider)
     local ok, err = send(agent, payload)
     if not ok then
       notify_error(err)
+    else
+      vim.api.nvim_echo({ { "prompt-relay: sent to " .. provider_names[agent.provider], "MoreMsg" } }, false, {})
     end
   end)
 end
@@ -170,8 +179,8 @@ end
 function M.setup(options)
   options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
 
-  if options.preferred_provider ~= "opencode" and options.preferred_provider ~= "claude" then
-    error("prompt-relay: preferred_provider must be 'opencode' or 'claude'")
+  if not vim.tbl_contains(providers, options.preferred_provider) then
+    error("prompt-relay: preferred_provider must be 'opencode', 'claude', or 'codex'")
   end
 
   if current_keymap then
