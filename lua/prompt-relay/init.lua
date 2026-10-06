@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+
 local M = {}
 
 local defaults = {
@@ -111,14 +113,16 @@ local function capture_context(is_visual)
     end_pos = start_pos
   end
 
-  local ref = "@" .. filename .. "#L" .. start_pos.line
-  if end_pos.line ~= start_pos.line then
-    ref = ref .. "-" .. end_pos.line
-  end
-
   local location
   if not is_visual then
     location = string.format("Location: %s:%d:%d", filename, start_pos.line, start_pos.column)
+  elseif start_pos.line == end_pos.line and start_pos.column == end_pos.column then
+    location = string.format("Selection: %s:%d:%d", filename, start_pos.line, start_pos.column)
+  elseif start_pos.line == end_pos.line then
+    location = string.format(
+      "Selection: %s:%d:%d-%d",
+      filename, start_pos.line, start_pos.column, end_pos.column
+    )
   else
     location = string.format(
       "Selection: %s:%d:%d-%d:%d",
@@ -126,23 +130,36 @@ local function capture_context(is_visual)
     )
   end
 
-  return { ref = ref, location = location }
+  return location
 end
 
-local function send(agent, payload)
+local function send(agent, payload, callback)
   local _, err = tmux({ "tmux", "load-buffer", "-" }, payload)
   if err then
-    return nil, "could not prepare the request for tmux: " .. err
+    callback(nil, "could not prepare the request for tmux: " .. err)
+    return
   end
   _, err = tmux({ "tmux", "paste-buffer", "-d", "-t", agent.pane })
   if err then
-    return nil, "could not paste the request into the agent pane: " .. err
+    callback(nil, "could not paste the request into the agent pane: " .. err)
+    return
   end
-  _, err = tmux({ "tmux", "send-keys", "-t", agent.pane, "Enter" })
-  if err then
-    return nil, "could not submit the request: " .. err
+
+  local function submit()
+    local _, submit_err = tmux({ "tmux", "send-keys", "-t", agent.pane, "Enter" })
+    if submit_err then
+      callback(nil, "could not submit the request: " .. submit_err)
+    else
+      callback(true)
+    end
   end
-  return true
+
+  -- Give Codex's TUI time to consume the bracketed paste before submitting.
+  if agent.provider == "codex" then
+    vim.defer_fn(submit, 200)
+  else
+    submit()
+  end
 end
 
 local function relay(is_visual, preferred_provider)
@@ -166,13 +183,14 @@ local function relay(is_visual, preferred_provider)
     if not request or vim.trim(request) == "" then
       return
     end
-    local payload = string.format("%s\n%s\n\n%s", context.ref, context.location, request)
-    local ok, err = send(agent, payload)
-    if not ok then
-      notify_error(err)
-    else
-      vim.api.nvim_echo({ { "prompt-relay: sent to " .. provider_names[agent.provider], "MoreMsg" } }, false, {})
-    end
+    local payload = string.format("%s\n\n%s", context, request)
+    send(agent, payload, function(ok, err)
+      if not ok then
+        notify_error(err)
+      else
+        vim.api.nvim_echo({ { "prompt-relay: sent to " .. provider_names[agent.provider], "MoreMsg" } }, false, {})
+      end
+    end)
   end)
 end
 

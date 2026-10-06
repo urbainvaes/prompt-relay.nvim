@@ -15,3 +15,7 @@ let g:prompt_relay = {'keymap': '<leader>a', 'preferred_provider': 'codex'}
 ```
 
 `preferred_provider` may be `opencode`, `claude`, or `codex`; set `keymap` to `v:false` to disable the mapping. Run the CLI interactively in a pane in Neovim's tmux session; OpenCode needs no extra launch flags for tmux input.
+
+Licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE).
+
+Written by GPT-6 Luna.

@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+
 if vim.g.loaded_prompt_relay then
   return
 end
