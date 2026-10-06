@@ -154,12 +154,8 @@ local function send(agent, payload, callback)
     end
   end
 
-  -- Give Codex's TUI time to consume the bracketed paste before submitting.
-  if agent.provider == "codex" then
-    vim.defer_fn(submit, 200)
-  else
-    submit()
-  end
+  -- Give the TUI time to consume the bracketed paste before submitting.
+  vim.defer_fn(submit, 200)
 end
 
 local function relay(is_visual, preferred_provider)
