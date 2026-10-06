@@ -1,0 +1,194 @@
+local M = {}
+
+local defaults = {
+  keymap = "<C-a>",
+  preferred_provider = "opencode",
+}
+
+local current_keymap
+
+local function notify_error(message)
+  vim.notify("prompt-relay: " .. message, vim.log.levels.ERROR)
+end
+
+local function tmux(args, input)
+  local output
+  if input == nil then
+    output = vim.fn.system(args)
+  else
+    output = vim.fn.system(args, input)
+  end
+  if vim.v.shell_error ~= 0 then
+    return nil, vim.trim(output)
+  end
+  return output
+end
+
+local function find_agent(preferred_provider)
+  if not vim.env.TMUX or not vim.env.TMUX_PANE then
+    return nil, "Neovim is not running in a tmux pane"
+  end
+
+  local session_id, err = tmux({
+    "tmux", "display-message", "-p", "-t", vim.env.TMUX_PANE, "#{session_id}",
+  })
+  if not session_id then
+    return nil, "could not determine the current tmux session: " .. err
+  end
+  session_id = vim.trim(session_id)
+
+  local panes, pane_err = tmux({
+    "tmux", "list-panes", "-s", "-t", session_id,
+    "-F", "#{pane_id}\t#{pane_current_command}",
+  })
+  if not panes then
+    return nil, "could not list tmux panes: " .. pane_err
+  end
+
+  local found = { opencode = {}, claude = {} }
+  for line in panes:gmatch("[^\n]+") do
+    local pane, command = line:match("^([^\t]+)\t(.+)$")
+    if pane and command then
+      command = vim.fs.basename(command):lower()
+      if command == "opencode" then
+        table.insert(found.opencode, pane)
+      elseif command == "claude" or command == "claude-code" then
+        table.insert(found.claude, pane)
+      end
+    end
+  end
+
+  local other_provider = preferred_provider == "opencode" and "claude" or "opencode"
+  local provider = #found[preferred_provider] > 0 and preferred_provider or other_provider
+  if #found[provider] == 0 then
+    return nil, "no Claude Code or OpenCode pane found in this tmux session"
+  end
+
+  return { provider = provider, pane = found[provider][1] }
+end
+
+local function position(line, column)
+  return { line = line, column = column }
+end
+
+local function capture_context(is_visual)
+  local filename = vim.fn.expand("%:p")
+  if filename == "" then
+    return nil, "the current buffer has no file name"
+  end
+  filename = vim.fn.fnamemodify(filename, ":.")
+
+  local start_pos, end_pos
+  if is_visual then
+    local anchor = vim.fn.getpos("v")
+    local cursor = vim.fn.getpos(".")
+    start_pos = position(anchor[2], vim.fn.virtcol("v"))
+    end_pos = position(cursor[2], vim.fn.virtcol("."))
+
+    if start_pos.line > end_pos.line
+      or (start_pos.line == end_pos.line and start_pos.column > end_pos.column) then
+      start_pos, end_pos = end_pos, start_pos
+    end
+  else
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    start_pos = position(cursor[1], vim.fn.virtcol("."))
+    end_pos = start_pos
+  end
+
+  local ref = "@" .. filename .. "#L" .. start_pos.line
+  if end_pos.line ~= start_pos.line then
+    ref = ref .. "-" .. end_pos.line
+  end
+
+  local location
+  if not is_visual then
+    location = string.format("Location: %s:%d:%d", filename, start_pos.line, start_pos.column)
+  else
+    location = string.format(
+      "Selection: %s:%d:%d-%d:%d",
+      filename, start_pos.line, start_pos.column, end_pos.line, end_pos.column
+    )
+  end
+
+  return { ref = ref, location = location }
+end
+
+local function send(agent, payload)
+  local _, err = tmux({ "tmux", "select-window", "-t", agent.pane })
+  if err then
+    return nil, "could not focus the agent pane: " .. err
+  end
+  _, err = tmux({ "tmux", "select-pane", "-t", agent.pane })
+  if err then
+    return nil, "could not focus the agent pane: " .. err
+  end
+
+  _, err = tmux({ "tmux", "load-buffer", "-" }, payload)
+  if err then
+    return nil, "could not prepare the request for tmux: " .. err
+  end
+  _, err = tmux({ "tmux", "paste-buffer", "-d", "-t", agent.pane })
+  if err then
+    return nil, "could not paste the request into the agent pane: " .. err
+  end
+  _, err = tmux({ "tmux", "send-keys", "-t", agent.pane, "Enter" })
+  if err then
+    return nil, "could not submit the request: " .. err
+  end
+  return true
+end
+
+local function relay(is_visual, preferred_provider)
+  local context, context_err = capture_context(is_visual)
+  if not context then
+    notify_error(context_err)
+    return
+  end
+
+  local agent, agent_err = find_agent(preferred_provider)
+  if not agent then
+    notify_error(agent_err)
+    return
+  end
+
+  if is_visual then
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  end
+
+  vim.ui.input({ prompt = "Request for " .. agent.provider .. ": " }, function(request)
+    if not request or vim.trim(request) == "" then
+      return
+    end
+    local payload = string.format("%s\n%s\n\n%s", context.ref, context.location, request)
+    local ok, err = send(agent, payload)
+    if not ok then
+      notify_error(err)
+    end
+  end)
+end
+
+function M.setup(options)
+  options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
+
+  if options.preferred_provider ~= "opencode" and options.preferred_provider ~= "claude" then
+    error("prompt-relay: preferred_provider must be 'opencode' or 'claude'")
+  end
+
+  if current_keymap then
+    pcall(vim.keymap.del, { "n", "x" }, current_keymap)
+    current_keymap = nil
+  end
+
+  if options.keymap ~= false then
+    current_keymap = options.keymap
+    local map_options = { desc = "Send a request to a tmux coding agent" }
+    vim.keymap.set("n", current_keymap, function()
+      relay(false, options.preferred_provider)
+    end, map_options)
+    vim.keymap.set("x", current_keymap, function()
+      relay(true, options.preferred_provider)
+    end, map_options)
+  end
+end
+
+return M
