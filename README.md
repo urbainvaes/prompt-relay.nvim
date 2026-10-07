@@ -5,7 +5,7 @@ Send a request from Neovim to Claude Code, OpenCode, or Codex in the current tmu
 Install with vim-plug:
 
 ```vim
-Plug '~/dotfiles/plugins/prompt-relay.nvim'
+Plug 'urbainvaes/prompt-relay.nvim'
 ```
 
 Change the mapping (default `<C-a>`) and, optionally, the provider preference before loading the plugin:
@@ -16,6 +16,10 @@ let g:prompt_relay = {'keymap': '<leader>a', 'preferred_provider': 'codex'}
 
 `preferred_provider` may be `opencode`, `claude`, or `codex`; set `keymap` to `v:false` to disable the mapping. Run the CLI interactively in a pane in Neovim's tmux session; OpenCode needs no extra launch flags for tmux input.
 
+## License
+
 Licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE).
+
+## Credits
 
 Written by GPT-6 Luna.
