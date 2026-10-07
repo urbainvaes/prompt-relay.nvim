@@ -15,9 +15,223 @@ local provider_names = {
 }
 
 local current_keymap
+local tracked_buffers = {}
+local sync_timer
+local syncing = false
 
 local function notify_error(message)
   vim.notify("prompt-relay: " .. message, vim.log.levels.ERROR)
+end
+
+local function same_lines(left, right)
+  if #left ~= #right then
+    return false
+  end
+  for i = 1, #left do
+    if left[i] ~= right[i] then
+      return false
+    end
+  end
+  return true
+end
+
+local function read_file_lines(path)
+  local ok, lines = pcall(vim.fn.readfile, path)
+  if not ok then
+    return nil
+  end
+  if #lines == 0 then
+    return { "" }
+  end
+  return lines
+end
+
+local function file_signature(path)
+  local stat = vim.uv.fs_stat(path)
+  if not stat or stat.type ~= "file" then
+    return nil
+  end
+  return table.concat({
+    stat.size,
+    stat.mtime.sec,
+    stat.mtime.nsec,
+    stat.ctime.sec,
+    stat.ctime.nsec,
+  }, ":")
+end
+
+local function track_buffer(buf)
+  if not vim.api.nvim_buf_is_valid(buf) or not vim.api.nvim_buf_is_loaded(buf) then
+    tracked_buffers[buf] = nil
+    return
+  end
+  if vim.bo[buf].buftype ~= "" or vim.bo[buf].binary then
+    return
+  end
+
+  local path = vim.api.nvim_buf_get_name(buf)
+  local signature = path ~= "" and file_signature(path) or nil
+  local lines = signature and read_file_lines(path) or nil
+  if signature and lines then
+    tracked_buffers[buf] = { path = path, signature = signature, disk_lines = lines }
+  end
+end
+
+local function buffer_lines(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  if #lines == 0 then
+    return { "" }
+  end
+  return lines
+end
+
+local function checkpoint_buffer(buf)
+  return vim.api.nvim_buf_call(buf, function()
+    if vim.bo[buf].modified then
+      vim.cmd("silent noautocmd write!")
+    end
+    return true
+  end)
+end
+
+local function apply_disk_changes(buf, old_lines, new_lines)
+  local old_text = table.concat(old_lines, "\n") .. "\n"
+  local new_text = table.concat(new_lines, "\n") .. "\n"
+  local hunks = vim.diff(old_text, new_text, { result_type = "indices" })
+
+  return vim.api.nvim_buf_call(buf, function()
+    for i = #hunks, 1, -1 do
+      local hunk = hunks[i]
+      local start_row = hunk[2] == 0 and hunk[1] or math.max(0, hunk[1] - 1)
+      local replacement = {}
+      for row = hunk[3], hunk[3] + hunk[4] - 1 do
+        table.insert(replacement, new_lines[row])
+      end
+
+      if i < #hunks then
+        pcall(vim.cmd, "undojoin")
+      end
+      vim.api.nvim_buf_set_lines(buf, start_row, start_row + hunk[2], false, replacement)
+    end
+
+    -- Only checkpoint the new undo state if the disk still matches what we
+    -- just applied; don't replace a newer concurrent write.
+    local current_disk = read_file_lines(vim.api.nvim_buf_get_name(buf))
+    if not current_disk or not same_lines(current_disk, new_lines) then
+      return false
+    end
+    return checkpoint_buffer(buf)
+  end)
+end
+
+local function sync_buffer(buf, state)
+  local signature = file_signature(state.path)
+  if not signature or signature == state.signature then
+    return
+  end
+
+  local disk_lines = read_file_lines(state.path)
+  if not disk_lines then
+    return
+  end
+  if same_lines(state.disk_lines, disk_lines) then
+    state.signature = signature
+    return
+  end
+
+  local current_lines = buffer_lines(buf)
+  if same_lines(current_lines, disk_lines) then
+    local ok, err = pcall(checkpoint_buffer, buf)
+    if not ok then
+      vim.notify("prompt-relay: could not checkpoint synced buffer: " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+    state.disk_lines = disk_lines
+    state.signature = signature
+    return
+  end
+  if not same_lines(current_lines, state.disk_lines) then
+    state.disk_lines = disk_lines
+    state.signature = signature
+    vim.notify(
+      "prompt-relay: external change to " .. vim.fn.fnamemodify(state.path, ":.")
+        .. " not synced because the buffer has unsaved edits",
+      vim.log.levels.WARN
+    )
+    return
+  end
+
+  local ok, checkpointed = pcall(apply_disk_changes, buf, state.disk_lines, disk_lines)
+  if not ok then
+    vim.notify("prompt-relay: could not sync external change: " .. tostring(checkpointed), vim.log.levels.ERROR)
+    return
+  end
+
+  state.disk_lines = disk_lines
+  if checkpointed then
+    state.signature = file_signature(state.path) or signature
+  end
+  vim.notify(
+    "prompt-relay: synced " .. vim.fn.fnamemodify(state.path, ":.") .. " (undo with u)",
+    vim.log.levels.INFO
+  )
+end
+
+local function poll_buffers()
+  if syncing then
+    return
+  end
+  syncing = true
+
+  for buf, state in pairs(tracked_buffers) do
+    if not vim.api.nvim_buf_is_valid(buf) or not vim.api.nvim_buf_is_loaded(buf) then
+      tracked_buffers[buf] = nil
+    else
+      sync_buffer(buf, state)
+    end
+  end
+
+  syncing = false
+end
+
+local function start_sync()
+  if sync_timer then
+    return
+  end
+
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    track_buffer(buf)
+  end
+  sync_timer = vim.uv.new_timer()
+  sync_timer:start(500, 500, vim.schedule_wrap(poll_buffers))
+end
+
+local function setup_sync_autocmds()
+  local group = vim.api.nvim_create_augroup("PromptRelaySync", { clear = true })
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufWritePost" }, {
+    group = group,
+    callback = function(args)
+      if sync_timer then
+        track_buffer(args.buf)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    group = group,
+    callback = function(args)
+      tracked_buffers[args.buf] = nil
+    end,
+  })
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = group,
+    callback = function()
+      if sync_timer then
+        sync_timer:stop()
+        sync_timer:close()
+        sync_timer = nil
+      end
+    end,
+  })
 end
 
 local function tmux(args, input)
@@ -180,6 +394,7 @@ local function relay(is_visual, preferred_provider)
       return
     end
     local payload = string.format("%s · %s", context, request)
+    start_sync()
     send(agent, payload, function(ok, err)
       if not ok then
         notify_error(err)
@@ -192,6 +407,7 @@ end
 
 function M.setup(options)
   options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
+  setup_sync_autocmds()
 
   if not vim.tbl_contains(providers, options.preferred_provider) then
     error("prompt-relay: preferred_provider must be 'opencode', 'claude', or 'codex'")
