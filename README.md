@@ -14,7 +14,7 @@ This plugin brings the same workflow to Claude Code, OpenCode, and Codex.
 ## Description of the plugin 
 
 Send a request from Neovim to a harness (Claude Code, OpenCode, or Codex) in the current tmux session.
-`<C-a>` prompts for a request and attaches the current file and cursor line/column;
+`<C-a>` prompts for a request and attaches the current file (as an absolute path) and cursor line/column;
 in visual mode, it attaches the selection range and columns.
 Neovim stays focused and shows a green success message after sending.
 OpenCode is preferred by default;

@@ -308,7 +308,8 @@ local function capture_context(is_visual)
   if filename == "" then
     return nil, "the current buffer has no file name"
   end
-  filename = vim.fn.fnamemodify(filename, ":.")
+  -- Absolute path, so the agent resolves it regardless of its working directory.
+  filename = vim.fs.normalize(vim.fn.fnamemodify(filename, ":p"))
 
   local start_pos, end_pos
   if is_visual then
