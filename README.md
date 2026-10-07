@@ -1,25 +1,29 @@
 # prompt-relay.nvim
 
-## Human preface
+## Motivation
 
-This plugin is only useful if you like to use `tmux` 
-with `nvim` and a harness (Claude Code, OpenCode, or Codex) running in different panes the same session.
+This plugin is for workflows that use Neovim and run a harness (Claude Code,
+OpenCode, or Codex) in another pane of the same tmux session. 
+The main goal is to remove the friction that occurs when switching back and forth between the editor and the harness.
 
-**The problem**. I often want to make AI-assisted edits to a file opened with `nvim` opened in a `tmux` pane.
-One solution would be to describe to the harness (Claude Code, OpenCode, or Codex), opened in another `tmux` pane,
-precisely where I am in the file, and what I want to do.
-But this is inefficient; it is much better to interact with the harness directly from the editor,
-without having to switch to a different pane and describe the cursor position or selection range precisely.
-The `opencode.nvim` plugin solved this problem for OpenCode
-(in fact, it was the only feature of the plugin that I used), 
-but the functionality was limited to OpenCode.
-This plugin provides a unified interface to send requests to a harness.
+When editing a file, I often want to ask an agent for a focused change.
+Switching panes and describing the exact cursor position or selection is cumbersome.
+The `opencode.nvim` plugin made this workflow convenient for OpenCode but it didn't support other agents.
+This plugin brings the same workflow to Claude Code, OpenCode, and Codex.
 
 ## Description of the plugin 
 
-Send a request from Neovim to Claude Code, OpenCode, or Codex in the current tmux session. `<C-a>` prompts for a request and attaches the current file and cursor line/column; in visual mode, it attaches the selection range and columns. Neovim stays focused and shows a green success message after sending. OpenCode is preferred by default; if no supported agent is found, Neovim reports an error.
+Send a request from Neovim to a harness (Claude Code, OpenCode, or Codex) in the current tmux session.
+`<C-a>` prompts for a request and attaches the current file and cursor line/column;
+in visual mode, it attaches the selection range and columns.
+Neovim stays focused and shows a green success message after sending.
+OpenCode is preferred by default;
+if no supported agent is found, Neovim reports an error.
 
-After sending, changes to already-open files sync into Neovim as undoable edits (`u` to undo). Files with unsaved local changes are left untouched and reported.
+After sending, changes to already-open files sync into Neovim as undoable edits (`u` to undo).
+Files with unsaved local changes are left untouched and reported.
+
+## Installation
 
 Install with vim-plug:
 
