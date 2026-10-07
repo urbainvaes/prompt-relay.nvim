@@ -179,7 +179,7 @@ local function relay(is_visual, preferred_provider)
     if not request or vim.trim(request) == "" then
       return
     end
-    local payload = string.format("%s\n\n%s", context, request)
+    local payload = string.format("%s · %s", context, request)
     send(agent, payload, function(ok, err)
       if not ok then
         notify_error(err)
