@@ -2,9 +2,10 @@
 
 ## Motivation
 
-This plugin is for workflows that use Neovim and run a harness (Claude Code,
-OpenCode, or Codex) in another pane of the same tmux session. 
-The main goal is to remove the friction that occurs when switching back and forth between the editor and the harness.
+This plugin is for workflows that use Neovim and run a harness (Claude Code, OpenCode, or Codex) 
+in another pane of the same tmux session. 
+The main goal is to remove the friction that occurs when frequently switching back and forth between the editor and the harness.
+It aims at doing **one thing well**: relaying prompts from Neovim to the harness.
 
 When editing a file, I often want to ask an agent for a focused change.
 Switching panes and describing the exact cursor position or selection is cumbersome.
