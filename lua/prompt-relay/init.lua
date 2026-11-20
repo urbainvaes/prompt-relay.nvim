@@ -349,7 +349,17 @@ local function capture_context(is_visual)
 end
 
 local function send(agent, payload, callback)
-  local _, err = tmux({ "tmux", "load-buffer", "-" }, payload)
+  -- Clear any draft already in the agent's prompt (e.g. a half-typed "/us"),
+  -- so the request is not appended to it: move to the end of the line, then
+  -- delete to its start. These readline-style keys are supported by Claude
+  -- Code, OpenCode, and Codex, and are harmless when the prompt is empty.
+  local _, err = tmux({ "tmux", "send-keys", "-t", agent.pane, "C-e", "C-u" })
+  if err then
+    callback(nil, "could not clear the agent prompt: " .. err)
+    return
+  end
+
+  _, err = tmux({ "tmux", "load-buffer", "-" }, payload)
   if err then
     callback(nil, "could not prepare the request for tmux: " .. err)
     return
