@@ -1,10 +1,21 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 
+local dictation = require("prompt-relay.dictation")
+local prompt = require("prompt-relay.prompt")
+
 local M = {}
 
 local defaults = {
   keymap = "<C-a>",
   preferred_provider = "opencode",
+  -- Set to false to disable dictation.
+  dictation = {
+    -- Hold to talk, or tap to start and tap again to stop.
+    key = "<M-v>",
+    whisper_cmd = "whisper-cli",
+    model = "~/.local/share/whisper.cpp/models/ggml-small.bin",
+    language = "auto",
+  },
 }
 
 local providers = { "opencode", "claude", "codex" }
@@ -383,7 +394,8 @@ local function send(agent, payload, callback)
   vim.defer_fn(submit, 200)
 end
 
-local function relay(is_visual, preferred_provider)
+local function relay(is_visual, options)
+  local preferred_provider = options.preferred_provider
   local context, context_err = capture_context(is_visual)
   if not context then
     notify_error(context_err)
@@ -400,25 +412,36 @@ local function relay(is_visual, preferred_provider)
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   end
 
-  vim.ui.input({ prompt = "Request for " .. provider_names[agent.provider] .. ": " }, function(request)
-    if not request or vim.trim(request) == "" then
-      return
-    end
-    local payload = string.format("%s · %s", context, request)
-    start_sync()
-    send(agent, payload, function(ok, err)
-      if not ok then
-        notify_error(err)
-      else
-        vim.api.nvim_echo({ { "prompt-relay: sent to " .. provider_names[agent.provider], "MoreMsg" } }, false, {})
-      end
-    end)
-  end)
+  prompt.open({
+    title = "Request for " .. provider_names[agent.provider],
+    dictation = options.dictation,
+    on_submit = function(request)
+      local payload = string.format("%s · %s", context, request)
+      start_sync()
+      send(agent, payload, function(ok, err)
+        if not ok then
+          notify_error(err)
+        else
+          vim.api.nvim_echo({ { "prompt-relay: sent to " .. provider_names[agent.provider], "MoreMsg" } }, false, {})
+        end
+      end)
+    end,
+  })
 end
 
 function M.setup(options)
   options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
   setup_sync_autocmds()
+
+  if options.dictation then
+    dictation.configure({
+      whisper_cmd = options.dictation.whisper_cmd,
+      model = options.dictation.model,
+      language = options.dictation.language,
+      threads = options.dictation.threads,
+      record_cmd = options.dictation.record_cmd,
+    })
+  end
 
   if not vim.tbl_contains(providers, options.preferred_provider) then
     error("prompt-relay: preferred_provider must be 'opencode', 'claude', or 'codex'")
@@ -433,10 +456,10 @@ function M.setup(options)
     current_keymap = options.keymap
     local map_options = { desc = "Send a request to a tmux coding agent" }
     vim.keymap.set("n", current_keymap, function()
-      relay(false, options.preferred_provider)
+      relay(false, options)
     end, map_options)
     vim.keymap.set("x", current_keymap, function()
-      relay(true, options.preferred_provider)
+      relay(true, options)
     end, map_options)
   end
 end
